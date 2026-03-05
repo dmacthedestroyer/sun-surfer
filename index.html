@@ -117,6 +117,9 @@
       const SURFER_SPEED = 0.45;
       const MAX_ALTITUDE = 0.92; // fraction of screen height from surface before "lost in space"
       const BURN_ALTITUDE = 30; // pixels above star surface = death
+      const BOOST_MULT_SMALL = 0.7;
+      const BOOST_MULT_MEDIUM = 0.7;
+      const BOOST_MULT_LARGE = 0.595;
 
       // ── GAME STATE ─────────────────────────────────────────
       let surfer,
@@ -161,6 +164,25 @@
         flareTimer = 40;
         frameCount = 0;
         gameMessage.style.display = "none";
+
+        // Guaranteed starting flare — at least medium, within 10% of surfer's X
+        const startFlareX = surfer.x + (Math.random() - 0.5) * W * 0.1;
+        const startSize = 18 + Math.random() * 10;
+        const startSpeed = 1.5 + Math.random() * 0.8;
+        flares.push({
+          x: startFlareX,
+          y: surfY - 5,
+          vx: (Math.random() - 0.5) * 0.6,
+          vy: -startSpeed,
+          size: startSize,
+          originalSize: startSize,
+          color: { r: 255, g: 180, b: 50 },
+          force: 9.0,
+          boostMult: BOOST_MULT_MEDIUM,
+          life: 1.0,
+          age: 0,
+          pulsePhase: Math.random() * Math.PI * 2,
+        });
 
         // Background stars (screen-space, will parallax)
         stars = [];
@@ -218,7 +240,7 @@
         // Spawn across a wide band (3x screen width) so flares look uniform when scrolling
         const spawnX = cameraX + (Math.random() - 0.5) * W * 3;
         const sizeCategory = Math.random();
-        let size, color, speed, force;
+        let size, color, speed, force, boostMult;
 
         if (sizeCategory < 0.5) {
           // Small flare
@@ -226,18 +248,21 @@
           color = { r: 255, g: 230, b: 100 };
           speed = 2.0 + Math.random() * 1.0;
           force = 5.0;
+          boostMult = BOOST_MULT_SMALL;
         } else if (sizeCategory < 0.82) {
           // Medium flare
           size = 18 + Math.random() * 10;
           color = { r: 255, g: 180, b: 50 };
           speed = 1.5 + Math.random() * 0.8;
           force = 9.0;
+          boostMult = BOOST_MULT_MEDIUM;
         } else {
           // Large flare - powerful!
           size = 30 + Math.random() * 14;
           color = { r: 255, g: 100, b: 30 };
           speed = 1.2 + Math.random() * 0.6;
           force = 16.0;
+          boostMult = BOOST_MULT_LARGE;
         }
 
         // Slight horizontal drift
@@ -252,6 +277,7 @@
           originalSize: size,
           color,
           force,
+          boostMult,
           life: 1.0,
           age: 0,
           pulsePhase: Math.random() * Math.PI * 2,
@@ -357,19 +383,21 @@
           return;
         }
 
-        // Warn surfer based on altitude
+        // Scoring — reward staying in the sweet spot
+        const altNorm = altitude / surfY; // 0..1
+        const sweetBonus = Math.max(0, 1 - Math.abs(altNorm - 0.45) * 6);
+        score += sweetBonus * 0.3;
+
+        // Expression based on altitude
         if (altitude < BURN_ALTITUDE + 50) {
           surfer.expression = "scared";
           surfer.expressionTimer = 30;
         } else if (surfer.y < 60) {
           surfer.expression = "worried";
           surfer.expressionTimer = 30;
+        } else if (sweetBonus > 0 && surfer.expressionTimer <= 0) {
+          surfer.expression = "cool";
         }
-
-        // Scoring — reward staying in the middle zone
-        const altNorm = altitude / surfY; // 0..1
-        const sweetBonus = Math.max(0, 1 - Math.abs(altNorm - 0.45) * 3);
-        score += sweetBonus * 0.3;
 
         // Spawn flares (in world space, near the camera view)
         flareTimer--;
@@ -400,7 +428,7 @@
           const fDist = Math.sqrt(fdx * fdx + fdy * fdy);
           if (fDist < f.size + SURFER_SIZE) {
             // Collected! Apply upward force (away from star)
-            surfer.vy -= f.force * 0.7;
+            surfer.vy -= f.force * f.boostMult;
 
             score += f.force * 10;
             flaresCollected++;
@@ -447,8 +475,7 @@
         starPulse += 0.03;
 
         // Update score display
-        const altPercent = Math.max(0, Math.min(100, (altitude / surfY) * 100));
-        scoreDisplay.textContent = `ALTITUDE: ${Math.floor(altPercent)}% | FLARES: ${flaresCollected} | SCORE: ${Math.floor(score)}`;
+        scoreDisplay.textContent = `FLARES: ${flaresCollected} | SCORE: ${Math.floor(score)}`;
       }
 
       // ── DRAW ───────────────────────────────────────────────
@@ -525,6 +552,32 @@
         outerGrad.addColorStop(1, "rgba(50, 80, 255, 0)");
         ctx.fillStyle = outerGrad;
         ctx.fillRect(0, outerY - 40, W, 70);
+
+        // Aurora effect in sweet spot zone
+        const sweetCenter = surfY * (1 - 0.45); // y where altNorm = 0.45
+        const sweetHalf = surfY / 6; // half-width where sweetBonus > 0
+        const auroraTop = sweetCenter - sweetHalf;
+        const auroraBot = sweetCenter + sweetHalf;
+        const auroraPhase = frameCount * 0.015;
+        for (let i = 0; i < 7; i++) {
+          const wave = Math.sin(auroraPhase + i * 1.1) * 0.35 + 0.65;
+          const bandY = auroraTop + ((auroraBot - auroraTop) * (i + 0.5)) / 7;
+          const bandH = (auroraBot - auroraTop) / 5;
+          const ag = ctx.createLinearGradient(
+            0,
+            bandY - bandH / 2,
+            0,
+            bandY + bandH / 2,
+          );
+          const hue = 130 + i * 20 + Math.sin(auroraPhase * 0.7 + i) * 25;
+          ag.addColorStop(0, `hsla(${hue}, 90%, 55%, 0)`);
+          ag.addColorStop(0.3, `hsla(${hue}, 90%, 55%, ${0.06 * wave})`);
+          ag.addColorStop(0.5, `hsla(${hue}, 90%, 60%, ${0.12 * wave})`);
+          ag.addColorStop(0.7, `hsla(${hue}, 90%, 55%, ${0.06 * wave})`);
+          ag.addColorStop(1, `hsla(${hue}, 90%, 55%, 0)`);
+          ctx.fillStyle = ag;
+          ctx.fillRect(0, bandY - bandH / 2, W, bandH);
+        }
 
         // Subtle altitude guide lines
         ctx.strokeStyle = "rgba(255, 200, 80, 0.05)";
@@ -1007,6 +1060,38 @@
             ctx.beginPath();
             ctx.moveTo(-3, -11);
             ctx.lineTo(3, -12);
+            ctx.stroke();
+            break;
+
+          case "cool":
+            // Sunglasses
+            ctx.fillStyle = "#111";
+            ctx.beginPath();
+            ctx.roundRect(-eyeX - 4, eyeY - 3, 8, 6, 1.5);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.roundRect(eyeX - 4, eyeY - 3, 8, 6, 1.5);
+            ctx.fill();
+            // Bridge
+            ctx.strokeStyle = "#111";
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.moveTo(-eyeX + 4, eyeY - 1);
+            ctx.lineTo(eyeX - 4, eyeY - 1);
+            ctx.stroke();
+            // Lens shine
+            ctx.fillStyle = "rgba(150, 220, 255, 0.35)";
+            ctx.beginPath();
+            ctx.ellipse(-eyeX + 1, eyeY - 1, 2, 1.5, -0.3, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.ellipse(eyeX + 1, eyeY - 1, 2, 1.5, -0.3, 0, Math.PI * 2);
+            ctx.fill();
+            // Confident smirk
+            ctx.strokeStyle = "#553300";
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.arc(0, -12, 4, 0.1, Math.PI - 0.4);
             ctx.stroke();
             break;
         }

@@ -78,13 +78,14 @@ Massive radial-gradient circle (white-yellow core → orange-red edge).
 
 ### Expressions
 
-| Expression | Trigger                         | Duration   | Visual                                           |
-| ---------- | ------------------------------- | ---------- | ------------------------------------------------ |
-| Happy      | Default                         | Persistent | Dot eyes + highlights, smile arc                 |
-| Excited    | Flare collected, `force ≤ 3`    | 20 frames  | Large eyes + star highlights, big smile          |
-| Woah       | Flare collected, `force > 3`    | 40 frames  | Hollow circle eyes, "O" mouth                    |
-| Scared     | Altitude < `BURN_ALTITUDE + 50` | 30 frames  | Wide eyes + white pupils, wavy mouth, sweat drop |
-| Worried    | `surfer.y < 60`                 | 30 frames  | Dot eyes, flat slanted mouth                     |
+| Expression | Trigger                         | Duration      | Visual                                           |
+| ---------- | ------------------------------- | ------------- | ------------------------------------------------ |
+| Happy      | Default                         | Persistent    | Dot eyes + highlights, smile arc                 |
+| Cool       | In sweet spot (no active timer) | While in zone | Dark sunglasses with blue lens shine, smirk      |
+| Excited    | Flare collected, `force ≤ 3`    | 20 frames     | Large eyes + star highlights, big smile          |
+| Woah       | Flare collected, `force > 3`    | 40 frames     | Hollow circle eyes, "O" mouth                    |
+| Scared     | Altitude < `BURN_ALTITUDE + 50` | 30 frames     | Wide eyes + white pupils, wavy mouth, sweat drop |
+| Worried    | `surfer.y < 60`                 | 30 frames     | Dot eyes, flat slanted mouth                     |
 
 ### Trail
 
@@ -96,13 +97,15 @@ Up to 25 cyan circles fading at `0.04` life/frame.
 
 Timer-based: one flare per expiry, reset to `[FLARE_SPAWN_INTERVAL_MIN, FLARE_SPAWN_INTERVAL_MAX]` frames. Upper bound compresses up to 40% as score → 500. Spawn at `surfaceY - 5`, random X within `±1.5W` of camera.
 
+**Starting flare**: On game start, one guaranteed medium flare spawns within ±10% screen width of the surfer's starting X. This prevents unwinnable opening situations.
+
 ### Types
 
-| Type   | Prob | Size (px) | Color (R,G,B) | Speed ↑ | Force |
-| ------ | ---- | --------- | ------------- | ------- | ----- |
-| Small  | 50%  | 10–16     | 255,230,100   | 2.0–3.0 | 5.0   |
-| Medium | 32%  | 18–28     | 255,180,50    | 1.5–2.3 | 9.0   |
-| Large  | 18%  | 30–44     | 255,100,30    | 1.2–1.8 | 16.0  |
+| Type   | Prob | Size (px) | Color (R,G,B) | Speed ↑ | Force | Boost mult |
+| ------ | ---- | --------- | ------------- | ------- | ----- | ---------- |
+| Small  | 50%  | 10–16     | 255,230,100   | 2.0–3.0 | 5.0   | 0.7        |
+| Medium | 32%  | 18–28     | 255,180,50    | 1.5–2.3 | 9.0   | 0.7        |
+| Large  | 18%  | 30–44     | 255,100,30    | 1.2–1.8 | 16.0  | 0.595      |
 
 ### Behavior
 
@@ -114,7 +117,7 @@ Timer-based: one flare per expiry, reset to `[FLARE_SPAWN_INTERVAL_MIN, FLARE_SP
 ### Collection
 
 - **Hit test**: distance(surfer, flare) < `flare.size + SURFER_SIZE`.
-- **Boost**: `vy -= force × 0.7`.
+- **Boost**: `vy -= Force × Boost mult`.
 - **Score**: `force × 10` points (→ 50 / 90 / 160).
 - Flare counter +1. Burst of 12 particles in flare color.
 
@@ -124,14 +127,13 @@ Collected, or off-screen: `screenX < -1.5W`, `screenX > 2.5W`, `y < -80`, or `y 
 
 ## Scoring
 
-- **Altitude bonus** (per frame): `max(0, 1 - |altNorm - 0.45| × 3) × 0.3` where `altNorm = altitude / surfaceY`.
+- **Altitude bonus** (per frame): `max(0, 1 - |altNorm - 0.45| × 6) × 0.3` where `altNorm = altitude / surfaceY`.
 - **Flare bonus**: `force × 10` on collection.
 
 ## HUD
 
-Top-center: `ALTITUDE: X% | FLARES: N | SCORE: N`
+Top-center: `FLARES: N | SCORE: N`
 
-- Altitude% = `(altitude / surfaceY) × 100`, clamped 0–100.
 - Golden text (#ffe8a0), letter-spacing, warm text-shadow.
 
 ## Game Over
@@ -148,6 +150,7 @@ Both show: sub-text "You rode N flares and scored N points", orange gradient "Ri
 - **Background stars**: 200 stars in upper 75% of screen. Twinkle (sine alpha). Parallax at 5–20% camera speed, wrap horizontally.
 - **Danger zone (low)**: Warm red gradient, `BURN_ALTITUDE + 50` px tall, fading upward from surface.
 - **Danger zone (high)**: Cool blue gradient near `surfaceY - H × MAX_ALTITUDE`.
+- **Sweet spot aurora**: 5 horizontal bands spanning the sweet spot zone (`altNorm` 0.117–0.783). Each band uses a shifting HSL hue (green→cyan range), fading to transparent at edges. Bands animate via sine wave for a gentle shimmer.
 - **Guide lines**: Dashed lines at burn/max altitude boundaries (5% opacity).
 - **Particles**: Position + velocity (0.98 drag) + size + color + life (decays 0.015–0.04/frame). Render as circles, alpha = life.
 
