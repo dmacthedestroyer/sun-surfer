@@ -1,0 +1,1133 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sun Surfer</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      body {
+        background: #0a0a1a;
+        overflow: hidden;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 100vh;
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      }
+      canvas {
+        display: block;
+        border-radius: 8px;
+      }
+      #ui-overlay {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        pointer-events: none;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+      }
+      #score-display {
+        margin-top: 20px;
+        color: #ffe8a0;
+        font-size: 22px;
+        text-shadow: 0 0 12px rgba(255, 200, 50, 0.6);
+        letter-spacing: 2px;
+      }
+      #game-message {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        color: #fff;
+        font-size: 32px;
+        text-align: center;
+        text-shadow: 0 0 20px rgba(255, 200, 100, 0.8);
+        pointer-events: auto;
+        display: none;
+      }
+      #game-message .sub {
+        font-size: 16px;
+        margin-top: 12px;
+        opacity: 0.7;
+      }
+      #game-message .restart-btn {
+        margin-top: 20px;
+        padding: 10px 30px;
+        font-size: 18px;
+        background: linear-gradient(135deg, #ff9944, #ff6622);
+        border: none;
+        border-radius: 25px;
+        color: white;
+        cursor: pointer;
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+        box-shadow: 0 0 20px rgba(255, 100, 0, 0.4);
+        transition: transform 0.15s;
+      }
+      #game-message .restart-btn:hover {
+        transform: scale(1.08);
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="gameCanvas"></canvas>
+    <div id="ui-overlay">
+      <div id="score-display">DISTANCE: 0 | FLARES: 0</div>
+      <div id="game-message">
+        <div id="msg-title"></div>
+        <div class="sub" id="msg-sub"></div>
+        <button class="restart-btn" id="restart-btn">Ride Again</button>
+      </div>
+    </div>
+
+    <script>
+      // ── SETUP ──────────────────────────────────────────────
+      const canvas = document.getElementById("gameCanvas");
+      const ctx = canvas.getContext("2d");
+      const scoreDisplay = document.getElementById("score-display");
+      const gameMessage = document.getElementById("game-message");
+      const msgTitle = document.getElementById("msg-title");
+      const msgSub = document.getElementById("msg-sub");
+      const restartBtn = document.getElementById("restart-btn");
+
+      let W, H;
+      function resize() {
+        W = canvas.width = window.innerWidth;
+        H = canvas.height = window.innerHeight;
+      }
+      resize();
+      window.addEventListener("resize", resize);
+
+      // ── CONSTANTS ──────────────────────────────────────────
+      const STAR_RADIUS_MULT = 8; // how many screen-widths the star radius spans (appears flat)
+      const GRAVITY = 0.06;
+      const DRAG_X = 0.97;
+      const DRAG_Y = 0.995;
+      const SURFER_SIZE = 18;
+      const SURFACE_Y_OFFSET = 100; // how far below bottom the star center line sits for visual
+      const FLARE_SPAWN_INTERVAL_MIN = 3;
+      const FLARE_SPAWN_INTERVAL_MAX = 8;
+      const SURFER_SPEED = 0.45;
+      const MAX_ALTITUDE = 0.92; // fraction of screen height from surface before "lost in space"
+      const BURN_ALTITUDE = 30; // pixels above star surface = death
+
+      // ── GAME STATE ─────────────────────────────────────────
+      let surfer,
+        flares,
+        particles,
+        stars,
+        starPulse,
+        gameState,
+        score,
+        flaresCollected;
+      let flareTimer, frameCount;
+      let keys = {};
+      let cameraX = 0; // world-space X offset for scrolling
+      let faceX = 0; // star face position (lags behind camera)
+
+      function starSurfaceY() {
+        // The star is so large its surface is a gentle curve near the bottom
+        return H - SURFACE_Y_OFFSET;
+      }
+
+      function initGame() {
+        const surfY = starSurfaceY();
+        cameraX = 0;
+        faceX = 0;
+        surfer = {
+          x: 0, // world-space X (camera centers on this)
+          y: H * 0.2,
+          vx: 0,
+          vy: 0,
+          trail: [],
+          bobPhase: 0,
+          glowPhase: 0,
+          expression: "happy",
+          expressionTimer: 0,
+        };
+        flares = [];
+        particles = [];
+        starPulse = 0;
+        gameState = "playing";
+        score = 0;
+        flaresCollected = 0;
+        flareTimer = 40;
+        frameCount = 0;
+        gameMessage.style.display = "none";
+
+        // Background stars (screen-space, will parallax)
+        stars = [];
+        for (let i = 0; i < 200; i++) {
+          stars.push({
+            x: Math.random() * W,
+            y: Math.random() * H * 0.75,
+            size: Math.random() * 2 + 0.5,
+            twinkle: Math.random() * Math.PI * 2,
+            speed: Math.random() * 0.02 + 0.005,
+            depth: 0.05 + Math.random() * 0.15, // parallax depth
+          });
+        }
+      }
+
+      // ── INPUT ──────────────────────────────────────────────
+      window.addEventListener("keydown", (e) => {
+        keys[e.code] = true;
+        if (e.code === "Space" && gameState !== "playing") {
+          initGame();
+        }
+      });
+      window.addEventListener("keyup", (e) => {
+        keys[e.code] = false;
+      });
+      restartBtn.addEventListener("click", () => initGame());
+
+      // Touch controls — tap left/right side of screen
+      let touchSide = 0; // -1 = left, 0 = none, 1 = right
+      canvas.addEventListener("touchstart", (e) => {
+        e.preventDefault();
+        const x = e.touches[0].clientX;
+        touchSide = x < W / 2 ? -1 : 1;
+      });
+      canvas.addEventListener("touchmove", (e) => {
+        e.preventDefault();
+        const x = e.touches[0].clientX;
+        touchSide = x < W / 2 ? -1 : 1;
+      });
+      canvas.addEventListener("touchend", (e) => {
+        e.preventDefault();
+        touchSide = 0;
+      });
+
+      // ── STAR CENTER ────────────────────────────────────────
+      function starCenter() {
+        // Center of the huge star — far below the screen
+        const R = W * STAR_RADIUS_MULT;
+        return { x: W / 2, y: starSurfaceY() + R };
+      }
+
+      // ── FLARE SPAWNING ─────────────────────────────────────
+      function spawnFlare() {
+        const surfY = starSurfaceY();
+        // Spawn across a wide band (3x screen width) so flares look uniform when scrolling
+        const spawnX = cameraX + (Math.random() - 0.5) * W * 3;
+        const sizeCategory = Math.random();
+        let size, color, speed, force;
+
+        if (sizeCategory < 0.5) {
+          // Small flare
+          size = 10 + Math.random() * 6;
+          color = { r: 255, g: 230, b: 100 };
+          speed = 2.0 + Math.random() * 1.0;
+          force = 5.0;
+        } else if (sizeCategory < 0.82) {
+          // Medium flare
+          size = 18 + Math.random() * 10;
+          color = { r: 255, g: 180, b: 50 };
+          speed = 1.5 + Math.random() * 0.8;
+          force = 9.0;
+        } else {
+          // Large flare - powerful!
+          size = 30 + Math.random() * 14;
+          color = { r: 255, g: 100, b: 30 };
+          speed = 1.2 + Math.random() * 0.6;
+          force = 16.0;
+        }
+
+        // Slight horizontal drift
+        const driftX = (Math.random() - 0.5) * 0.6;
+
+        flares.push({
+          x: spawnX,
+          y: surfY - 5,
+          vx: driftX,
+          vy: -speed, // always erupt upward
+          size,
+          originalSize: size,
+          color,
+          force,
+          life: 1.0,
+          age: 0,
+          pulsePhase: Math.random() * Math.PI * 2,
+        });
+      }
+
+      // ── PARTICLES ──────────────────────────────────────────
+      function spawnParticles(x, y, count, color, spread, speedMul) {
+        for (let i = 0; i < count; i++) {
+          const angle = Math.random() * Math.PI * 2;
+          const spd = Math.random() * spread * (speedMul || 1);
+          particles.push({
+            x,
+            y,
+            vx: Math.cos(angle) * spd,
+            vy: Math.sin(angle) * spd,
+            size: Math.random() * 4 + 1,
+            life: 1.0,
+            decay: 0.015 + Math.random() * 0.025,
+            color,
+          });
+        }
+      }
+
+      // ── UPDATE ─────────────────────────────────────────────
+      function update() {
+        if (gameState !== "playing") return;
+
+        frameCount++;
+        const surfY = starSurfaceY();
+
+        // Surfer input — horizontal only
+        if (keys["ArrowLeft"] || keys["KeyA"]) surfer.vx -= SURFER_SPEED;
+        if (keys["ArrowRight"] || keys["KeyD"]) surfer.vx += SURFER_SPEED;
+
+        // Touch input — tap left/right half of screen
+        if (touchSide !== 0) {
+          surfer.vx += SURFER_SPEED * touchSide;
+        }
+
+        // Gravity — always pulls straight down toward the star surface
+        surfer.vy += GRAVITY;
+
+        // Drag
+        surfer.vx *= DRAG_X;
+        surfer.vy *= DRAG_Y;
+
+        // Clamp horizontal speed
+        if (Math.abs(surfer.vx) > 7) surfer.vx = Math.sign(surfer.vx) * 7;
+        // Clamp vertical speed
+        if (surfer.vy > 6) surfer.vy = 6;
+        if (surfer.vy < -10) surfer.vy = -10;
+
+        surfer.x += surfer.vx;
+        surfer.y += surfer.vy;
+
+        // Update camera to follow surfer horizontally
+        cameraX = surfer.x;
+
+        // Star face lags behind camera
+        faceX += (cameraX - faceX) * 0.03;
+
+        // Don't let surfer go above screen — that's a loss condition handled below
+
+        // Trail (store in world space)
+        surfer.trail.push({ x: surfer.x, y: surfer.y, life: 1.0 });
+        if (surfer.trail.length > 25) surfer.trail.shift();
+        surfer.trail.forEach((t) => (t.life -= 0.04));
+
+        surfer.bobPhase += 0.06;
+        surfer.glowPhase += 0.04;
+
+        // Expression timer
+        if (surfer.expressionTimer > 0) surfer.expressionTimer--;
+        else surfer.expression = "happy";
+
+        // Altitude = distance above star surface (pixels)
+        const altitude = surfY - surfer.y;
+
+        // Check game over - crashed into star
+        if (altitude < BURN_ALTITUDE) {
+          gameState = "burned";
+          msgTitle.textContent = "☀️ Burned Up!";
+          msgSub.textContent = `You rode ${flaresCollected} flares and scored ${Math.floor(score)} points`;
+          gameMessage.style.display = "block";
+          spawnParticles(
+            surfer.x,
+            surfer.y,
+            40,
+            { r: 255, g: 200, b: 50 },
+            5,
+            1.5,
+          );
+          return;
+        }
+
+        // Check game over - too far from star (hit top of screen)
+        if (surfer.y <= 0) {
+          gameState = "lost";
+          msgTitle.textContent = "🌌 Lost in Space!";
+          msgSub.textContent = `You rode ${flaresCollected} flares and scored ${Math.floor(score)} points`;
+          gameMessage.style.display = "block";
+          return;
+        }
+
+        // Warn surfer based on altitude
+        if (altitude < BURN_ALTITUDE + 50) {
+          surfer.expression = "scared";
+          surfer.expressionTimer = 30;
+        } else if (surfer.y < 60) {
+          surfer.expression = "worried";
+          surfer.expressionTimer = 30;
+        }
+
+        // Scoring — reward staying in the middle zone
+        const altNorm = altitude / surfY; // 0..1
+        const sweetBonus = Math.max(0, 1 - Math.abs(altNorm - 0.45) * 3);
+        score += sweetBonus * 0.3;
+
+        // Spawn flares (in world space, near the camera view)
+        flareTimer--;
+        if (flareTimer <= 0) {
+          spawnFlare();
+          const rateBoost = Math.min(score / 500, 0.4);
+          flareTimer =
+            FLARE_SPAWN_INTERVAL_MIN +
+            Math.random() *
+              (FLARE_SPAWN_INTERVAL_MAX - FLARE_SPAWN_INTERVAL_MIN) *
+              (1 - rateBoost);
+        }
+
+        // Update flares
+        for (let i = flares.length - 1; i >= 0; i--) {
+          const f = flares[i];
+          f.x += f.vx;
+          f.y += f.vy;
+          f.age++;
+          f.pulsePhase += 0.08;
+
+          // Flares keep their full size
+          f.size = f.originalSize;
+
+          // Check collision with surfer (both in world space)
+          const fdx = f.x - surfer.x;
+          const fdy = f.y - surfer.y;
+          const fDist = Math.sqrt(fdx * fdx + fdy * fdy);
+          if (fDist < f.size + SURFER_SIZE) {
+            // Collected! Apply upward force (away from star)
+            surfer.vy -= f.force * 0.7;
+
+            score += f.force * 10;
+            flaresCollected++;
+
+            // Particles
+            spawnParticles(f.x, f.y, 12, f.color, 3, 1);
+
+            // Expression
+            if (f.force > 3) {
+              surfer.expression = "woah";
+              surfer.expressionTimer = 40;
+            } else {
+              surfer.expression = "excited";
+              surfer.expressionTimer = 20;
+            }
+
+            flares.splice(i, 1);
+            continue;
+          }
+
+          // Remove flares that are far from camera
+          const screenFX = f.x - cameraX + W / 2;
+          if (
+            screenFX < -W * 1.5 ||
+            screenFX > W * 2.5 ||
+            f.y < -80 ||
+            f.y > surfY + 20
+          ) {
+            flares.splice(i, 1);
+          }
+        }
+
+        // Update particles
+        for (let i = particles.length - 1; i >= 0; i--) {
+          const p = particles[i];
+          p.x += p.vx;
+          p.y += p.vy;
+          p.vx *= 0.98;
+          p.vy *= 0.98;
+          p.life -= p.decay;
+          if (p.life <= 0) particles.splice(i, 1);
+        }
+
+        starPulse += 0.03;
+
+        // Update score display
+        const altPercent = Math.max(0, Math.min(100, (altitude / surfY) * 100));
+        scoreDisplay.textContent = `ALTITUDE: ${Math.floor(altPercent)}% | FLARES: ${flaresCollected} | SCORE: ${Math.floor(score)}`;
+      }
+
+      // ── DRAW ───────────────────────────────────────────────
+      function draw() {
+        ctx.fillStyle = "#0a0a1a";
+        ctx.fillRect(0, 0, W, H);
+
+        const sc = starCenter();
+
+        // Background stars
+        drawStars();
+
+        // Safe zone indicator (subtle)
+        drawSafeZone(sc);
+
+        // Star glow
+        drawStarGlow(sc);
+
+        // Star body
+        drawStar(sc);
+
+        // Flares
+        flares.forEach(drawFlare);
+
+        // Particles
+        particles.forEach(drawParticle);
+
+        // Surfer trail
+        drawTrail();
+
+        // Surfer
+        drawSurfer();
+      }
+
+      function drawStars() {
+        stars.forEach((s) => {
+          s.twinkle += s.speed;
+          const alpha = 0.3 + Math.sin(s.twinkle) * 0.3 + 0.3;
+          // Parallax: shift by camera, wrap around screen
+          const px = (((s.x - cameraX * s.depth) % W) + W) % W;
+          ctx.fillStyle = `rgba(255, 255, 240, ${alpha})`;
+          ctx.beginPath();
+          ctx.arc(px, s.y, s.size, 0, Math.PI * 2);
+          ctx.fill();
+        });
+      }
+
+      function drawSafeZone(sc) {
+        const surfY = starSurfaceY();
+
+        // Danger zone near star surface — warm glow
+        const dangerH = BURN_ALTITUDE + 50;
+        const innerGrad = ctx.createLinearGradient(
+          0,
+          surfY - dangerH,
+          0,
+          surfY,
+        );
+        innerGrad.addColorStop(0, "rgba(255, 80, 20, 0)");
+        innerGrad.addColorStop(1, "rgba(255, 80, 20, 0.08)");
+        ctx.fillStyle = innerGrad;
+        ctx.fillRect(0, surfY - dangerH, W, dangerH);
+
+        // Danger zone high up — cold glow
+        const maxAlt = H * MAX_ALTITUDE;
+        const outerY = surfY - maxAlt;
+        const outerGrad = ctx.createLinearGradient(
+          0,
+          outerY - 40,
+          0,
+          outerY + 30,
+        );
+        outerGrad.addColorStop(0, "rgba(50, 80, 255, 0.06)");
+        outerGrad.addColorStop(1, "rgba(50, 80, 255, 0)");
+        ctx.fillStyle = outerGrad;
+        ctx.fillRect(0, outerY - 40, W, 70);
+
+        // Subtle altitude guide lines
+        ctx.strokeStyle = "rgba(255, 200, 80, 0.05)";
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 8]);
+        ctx.beginPath();
+        ctx.moveTo(0, surfY - BURN_ALTITUDE);
+        ctx.lineTo(W, surfY - BURN_ALTITUDE);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(0, outerY);
+        ctx.lineTo(W, outerY);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+
+      function drawStarGlow(sc) {
+        const surfY = starSurfaceY();
+        const pulse = Math.sin(starPulse) * 0.08 + 1;
+        const glowHeight = 180 * pulse;
+
+        // Upward glow from the surface
+        const g1 = ctx.createLinearGradient(0, surfY, 0, surfY - glowHeight);
+        g1.addColorStop(0, "rgba(255, 200, 50, 0.25)");
+        g1.addColorStop(0.3, "rgba(255, 140, 30, 0.10)");
+        g1.addColorStop(0.6, "rgba(255, 80, 20, 0.03)");
+        g1.addColorStop(1, "rgba(255, 50, 10, 0)");
+        ctx.fillStyle = g1;
+        ctx.fillRect(0, surfY - glowHeight, W, glowHeight);
+
+        // Corona rays erupting upward from surface
+        const rayCount = 20;
+        for (let i = 0; i < rayCount; i++) {
+          // Rays scroll with the world at a slightly slower rate (parallax)
+          const worldRayX =
+            (i / rayCount) * W * 1.5 + Math.sin(frameCount * 0.01 + i) * 20;
+          const rx =
+            ((((worldRayX - cameraX * 0.3) % (W * 1.5)) + W * 1.5) %
+              (W * 1.5)) -
+            W * 0.25;
+          const rayLen = 50 + Math.sin(starPulse * 2 + i * 1.7) * 25;
+          const rayWidth = 3 + Math.sin(starPulse * 3 + i * 2) * 2;
+          const rg = ctx.createLinearGradient(rx, surfY, rx, surfY - rayLen);
+          rg.addColorStop(0, "rgba(255, 220, 100, 0.2)");
+          rg.addColorStop(1, "rgba(255, 180, 50, 0)");
+          ctx.fillStyle = rg;
+          ctx.beginPath();
+          ctx.moveTo(rx - rayWidth, surfY);
+          ctx.lineTo(rx, surfY - rayLen);
+          ctx.lineTo(rx + rayWidth, surfY);
+          ctx.fill();
+        }
+      }
+
+      function drawStar(sc) {
+        const surfY = starSurfaceY();
+        const R = W * STAR_RADIUS_MULT;
+
+        // Main star body — massive circle with surface near bottom
+        const g = ctx.createRadialGradient(
+          sc.x,
+          sc.y - R * 0.02,
+          R * 0.1,
+          sc.x,
+          sc.y,
+          R,
+        );
+        g.addColorStop(0, "#fff8e0");
+        g.addColorStop(0.85, "#ffe480");
+        g.addColorStop(0.92, "#ffb030");
+        g.addColorStop(0.97, "#ff7020");
+        g.addColorStop(1, "#cc3500");
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.arc(sc.x, sc.y, R, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Surface detail — animated bright spots along the visible surface
+        for (let i = 0; i < 15; i++) {
+          const phase = i * 0.87 + frameCount * 0.003;
+          const worldSpotX = (i / 15) * W * 2 + Math.sin(phase * 3) * 15;
+          const sx =
+            ((((worldSpotX - cameraX * 0.5) % (W * 2)) + W * 2) % (W * 2)) -
+            W * 0.5;
+          const sy = surfY + 5 + Math.sin(phase) * 4;
+          const spotSize = 6 + Math.sin(frameCount * 0.02 + i) * 3;
+          ctx.fillStyle = "rgba(255, 255, 200, 0.15)";
+          ctx.beginPath();
+          ctx.arc(sx, sy, spotSize, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        // Cute face on the star surface (peeking up, lags behind camera)
+        ctx.save();
+        const faceScreenX = faceX - cameraX + W / 2;
+        const faceY = surfY + 35;
+        ctx.translate(faceScreenX, faceY);
+
+        // Eyes
+        ctx.fillStyle = "#884400";
+        const eyeY = -12;
+        const eyeX = 25;
+
+        const blinkCycle = Math.floor(frameCount / 180) % 5;
+        const blinkFrame = frameCount % 180;
+        if (blinkCycle === 0 && blinkFrame < 8) {
+          ctx.fillRect(-eyeX - 5, eyeY, 10, 3);
+          ctx.fillRect(eyeX - 5, eyeY, 10, 3);
+        } else {
+          ctx.beginPath();
+          ctx.arc(-eyeX, eyeY, 7, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.beginPath();
+          ctx.arc(eyeX, eyeY, 7, 0, Math.PI * 2);
+          ctx.fill();
+
+          ctx.fillStyle = "#fff8e0";
+          ctx.beginPath();
+          ctx.arc(-eyeX + 2, eyeY - 2, 3, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.beginPath();
+          ctx.arc(eyeX + 2, eyeY - 2, 3, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        // Cheeks
+        ctx.fillStyle = "rgba(255, 100, 50, 0.3)";
+        ctx.beginPath();
+        ctx.ellipse(-42, 2, 12, 7, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.ellipse(42, 2, 12, 7, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Smile
+        ctx.strokeStyle = "#884400";
+        ctx.lineWidth = 3;
+        ctx.lineCap = "round";
+        ctx.beginPath();
+        ctx.arc(0, 0, 18, 0.15, Math.PI - 0.15);
+        ctx.stroke();
+
+        ctx.restore();
+      }
+
+      function drawFlare(f) {
+        // Convert world-space flare to screen-space
+        const screenX = f.x - cameraX + W / 2;
+        const pulse = 1 + Math.sin(f.pulsePhase) * 0.2;
+        const sz = f.size * pulse;
+        const alpha = f.life * 0.8;
+
+        // Glow
+        const fg = ctx.createRadialGradient(
+          screenX,
+          f.y,
+          0,
+          screenX,
+          f.y,
+          sz * 2,
+        );
+        fg.addColorStop(
+          0,
+          `rgba(${f.color.r}, ${f.color.g}, ${f.color.b}, ${alpha * 0.5})`,
+        );
+        fg.addColorStop(1, `rgba(${f.color.r}, ${f.color.g}, ${f.color.b}, 0)`);
+        ctx.fillStyle = fg;
+        ctx.beginPath();
+        ctx.arc(screenX, f.y, sz * 2, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Core
+        const cg = ctx.createRadialGradient(screenX, f.y, 0, screenX, f.y, sz);
+        cg.addColorStop(0, `rgba(255, 255, 230, ${alpha})`);
+        cg.addColorStop(
+          0.5,
+          `rgba(${f.color.r}, ${f.color.g}, ${f.color.b}, ${alpha * 0.9})`,
+        );
+        cg.addColorStop(
+          1,
+          `rgba(${f.color.r}, ${f.color.g}, ${f.color.b}, ${alpha * 0.3})`,
+        );
+        ctx.fillStyle = cg;
+        ctx.beginPath();
+        ctx.arc(screenX, f.y, sz, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Size indicator (cute sparkles for large ones)
+        if (f.originalSize > 24) {
+          ctx.strokeStyle = `rgba(255, 200, 100, ${alpha * 0.4})`;
+          ctx.lineWidth = 1.5;
+          for (let j = 0; j < 4; j++) {
+            const sa = (j * Math.PI) / 2 + f.pulsePhase * 0.5;
+            const sLen = sz * 0.8;
+            ctx.beginPath();
+            ctx.moveTo(
+              screenX + Math.cos(sa) * sz * 0.6,
+              f.y + Math.sin(sa) * sz * 0.6,
+            );
+            ctx.lineTo(
+              screenX + Math.cos(sa) * (sz * 0.6 + sLen * 0.4),
+              f.y + Math.sin(sa) * (sz * 0.6 + sLen * 0.4),
+            );
+            ctx.stroke();
+          }
+        }
+      }
+
+      function drawParticle(p) {
+        const screenX = p.x - cameraX + W / 2;
+        ctx.fillStyle = `rgba(${p.color.r}, ${p.color.g}, ${p.color.b}, ${p.life})`;
+        ctx.beginPath();
+        ctx.arc(screenX, p.y, p.size * p.life, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      function drawTrail() {
+        for (let i = 0; i < surfer.trail.length; i++) {
+          const t = surfer.trail[i];
+          if (t.life <= 0) continue;
+          const alpha = t.life * 0.4;
+          const sz = SURFER_SIZE * 0.5 * t.life;
+          const screenX = t.x - cameraX + W / 2;
+          ctx.fillStyle = `rgba(100, 200, 255, ${alpha})`;
+          ctx.beginPath();
+          ctx.arc(screenX, t.y, sz, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+
+      function drawSurfer() {
+        const bob = Math.sin(surfer.bobPhase) * 3;
+        const glow = 0.3 + Math.sin(surfer.glowPhase) * 0.15;
+        // Surfer is always at screen center horizontally
+        const sx = W / 2;
+        const sy = surfer.y + bob;
+        const surfY = starSurfaceY();
+
+        ctx.save();
+        ctx.translate(sx, sy);
+
+        // Shield glow — heat based on proximity to star surface
+        const altitude = surfY - sy;
+        const heatGlow = Math.max(0, 1 - altitude / 200);
+        if (heatGlow > 0) {
+          ctx.fillStyle = `rgba(255, 150, 50, ${heatGlow * 0.2})`;
+          ctx.beginPath();
+          ctx.arc(0, 0, SURFER_SIZE * 2.5, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        // Surfer glow
+        const sg = ctx.createRadialGradient(
+          0,
+          0,
+          SURFER_SIZE * 0.5,
+          0,
+          0,
+          SURFER_SIZE * 2,
+        );
+        sg.addColorStop(0, `rgba(80, 180, 255, ${glow})`);
+        sg.addColorStop(1, "rgba(80, 180, 255, 0)");
+        ctx.fillStyle = sg;
+        ctx.beginPath();
+        ctx.arc(0, 0, SURFER_SIZE * 2, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Surfboard
+        ctx.save();
+        ctx.rotate(surfer.vx * 0.08);
+
+        // Board body
+        const boardGrad = ctx.createLinearGradient(-22, 0, 22, 0);
+        boardGrad.addColorStop(0, "#44ddff");
+        boardGrad.addColorStop(0.5, "#88eeff");
+        boardGrad.addColorStop(1, "#44ddff");
+        ctx.fillStyle = boardGrad;
+        ctx.beginPath();
+        ctx.ellipse(0, 10, 22, 5, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Board shine
+        ctx.fillStyle = "rgba(255, 255, 255, 0.3)";
+        ctx.beginPath();
+        ctx.ellipse(0, 8, 15, 2, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Board energy lines
+        ctx.strokeStyle = "rgba(150, 230, 255, 0.5)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(-15, 10);
+        ctx.lineTo(15, 10);
+        ctx.stroke();
+
+        ctx.restore();
+
+        // Body
+        const bodyGrad = ctx.createRadialGradient(-2, -5, 2, 0, 0, SURFER_SIZE);
+        bodyGrad.addColorStop(0, "#ffe0c0");
+        bodyGrad.addColorStop(1, "#ffb880");
+        ctx.fillStyle = bodyGrad;
+
+        // Torso
+        ctx.beginPath();
+        ctx.ellipse(0, -2, 9, 11, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Space suit accent
+        ctx.fillStyle = "#5599ff";
+        ctx.beginPath();
+        ctx.ellipse(0, 2, 8, 6, 0, 0.3, Math.PI - 0.3);
+        ctx.fill();
+
+        // Head
+        ctx.fillStyle = "#ffe0c0";
+        ctx.beginPath();
+        ctx.arc(0, -14, 9, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Helmet visor
+        ctx.fillStyle = "rgba(100, 200, 255, 0.3)";
+        ctx.beginPath();
+        ctx.arc(0, -14, 10, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.strokeStyle = "rgba(100, 200, 255, 0.5)";
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(0, -14, 10.5, -0.5, Math.PI + 0.5);
+        ctx.stroke();
+
+        // Hair tufts (flowing in solar wind)
+        ctx.fillStyle = "#ff8844";
+        const windDir = Math.sin(frameCount * 0.05) * 0.3;
+        for (let i = 0; i < 3; i++) {
+          ctx.save();
+          ctx.translate(-4 + i * 4, -22);
+          ctx.rotate(windDir + (i - 1) * 0.2);
+          ctx.beginPath();
+          ctx.ellipse(0, -3, 2, 5, 0, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        }
+
+        // Face based on expression
+        drawFace(surfer.expression);
+
+        // Arms (waving for balance)
+        ctx.strokeStyle = "#ffb880";
+        ctx.lineWidth = 3;
+        ctx.lineCap = "round";
+        const armWave = Math.sin(surfer.bobPhase * 1.5) * 0.3;
+
+        // Left arm
+        ctx.beginPath();
+        ctx.moveTo(-8, -2);
+        ctx.quadraticCurveTo(-18, -8 + armWave * 10, -20, -4);
+        ctx.stroke();
+
+        // Right arm
+        ctx.beginPath();
+        ctx.moveTo(8, -2);
+        ctx.quadraticCurveTo(18, -8 - armWave * 10, 20, -4);
+        ctx.stroke();
+
+        ctx.restore();
+      }
+
+      function drawFace(expression) {
+        const eyeY = -16;
+        const eyeX = 4;
+        const eyeSize = 2.5;
+
+        switch (expression) {
+          case "happy":
+            // Eyes
+            ctx.fillStyle = "#553300";
+            ctx.beginPath();
+            ctx.arc(-eyeX, eyeY, eyeSize, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(eyeX, eyeY, eyeSize, 0, Math.PI * 2);
+            ctx.fill();
+            // Eye highlights
+            ctx.fillStyle = "#fff";
+            ctx.beginPath();
+            ctx.arc(-eyeX + 1, eyeY - 1, 1, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(eyeX + 1, eyeY - 1, 1, 0, Math.PI * 2);
+            ctx.fill();
+            // Smile
+            ctx.strokeStyle = "#553300";
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.arc(0, -12, 4, 0.2, Math.PI - 0.2);
+            ctx.stroke();
+            break;
+
+          case "excited":
+            // Big sparkly eyes
+            ctx.fillStyle = "#553300";
+            ctx.beginPath();
+            ctx.arc(-eyeX, eyeY, eyeSize + 1, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(eyeX, eyeY, eyeSize + 1, 0, Math.PI * 2);
+            ctx.fill();
+            // Stars in eyes
+            ctx.fillStyle = "#fff";
+            drawMiniStar(-eyeX, eyeY, 2);
+            drawMiniStar(eyeX, eyeY, 2);
+            // Big smile
+            ctx.strokeStyle = "#553300";
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.arc(0, -13, 5, 0.1, Math.PI - 0.1);
+            ctx.stroke();
+            break;
+
+          case "woah":
+            // O eyes
+            ctx.strokeStyle = "#553300";
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.arc(-eyeX, eyeY, eyeSize + 0.5, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.arc(eyeX, eyeY, eyeSize + 0.5, 0, Math.PI * 2);
+            ctx.stroke();
+            // O mouth
+            ctx.beginPath();
+            ctx.arc(0, -11, 3, 0, Math.PI * 2);
+            ctx.stroke();
+            break;
+
+          case "scared":
+            // Wide eyes
+            ctx.fillStyle = "#553300";
+            ctx.beginPath();
+            ctx.arc(-eyeX, eyeY - 1, eyeSize + 1.5, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(eyeX, eyeY - 1, eyeSize + 1.5, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = "#fff";
+            ctx.beginPath();
+            ctx.arc(-eyeX, eyeY - 1, 1.5, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(eyeX, eyeY - 1, 1.5, 0, Math.PI * 2);
+            ctx.fill();
+            // Wavy mouth
+            ctx.strokeStyle = "#553300";
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.moveTo(-4, -11);
+            ctx.quadraticCurveTo(-2, -9, 0, -11);
+            ctx.quadraticCurveTo(2, -13, 4, -11);
+            ctx.stroke();
+            // Sweat drop
+            ctx.fillStyle = "rgba(100, 200, 255, 0.6)";
+            ctx.beginPath();
+            ctx.ellipse(8, eyeY - 4, 1.5, 2.5, 0.3, 0, Math.PI * 2);
+            ctx.fill();
+            break;
+
+          case "worried":
+            // Slightly concerned eyes
+            ctx.fillStyle = "#553300";
+            ctx.beginPath();
+            ctx.arc(-eyeX, eyeY, eyeSize, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(eyeX, eyeY, eyeSize, 0, Math.PI * 2);
+            ctx.fill();
+            // Flat/worried mouth
+            ctx.strokeStyle = "#553300";
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.moveTo(-3, -11);
+            ctx.lineTo(3, -12);
+            ctx.stroke();
+            break;
+        }
+      }
+
+      function drawMiniStar(x, y, size) {
+        const points = 4;
+        ctx.beginPath();
+        for (let i = 0; i < points * 2; i++) {
+          const angle = (i / (points * 2)) * Math.PI * 2 - Math.PI / 2;
+          const r = i % 2 === 0 ? size : size * 0.4;
+          ctx.lineTo(x + Math.cos(angle) * r, y + Math.sin(angle) * r);
+        }
+        ctx.closePath();
+        ctx.fill();
+      }
+
+      // ── START SCREEN ───────────────────────────────────────
+      let showingStart = true;
+      function drawStartScreen() {
+        ctx.fillStyle = "#0a0a1a";
+        ctx.fillRect(0, 0, W, H);
+
+        // Background stars
+        stars.forEach((s) => {
+          s.twinkle += s.speed;
+          const alpha = 0.3 + Math.sin(s.twinkle) * 0.3 + 0.3;
+          ctx.fillStyle = `rgba(255, 255, 240, ${alpha})`;
+          ctx.beginPath();
+          ctx.arc(s.x, s.y, s.size, 0, Math.PI * 2);
+          ctx.fill();
+        });
+
+        starPulse += 0.02;
+        const sc = starCenter();
+        drawStarGlow(sc);
+        drawStar(sc);
+
+        // Title
+        ctx.save();
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+
+        // Title glow
+        ctx.shadowColor = "rgba(255, 180, 50, 0.6)";
+        ctx.shadowBlur = 30;
+        ctx.font = 'bold 56px "Segoe UI", sans-serif';
+        ctx.fillStyle = "#ffe080";
+        ctx.fillText("☀️ Sun Surfer", W / 2, H * 0.18);
+        ctx.shadowBlur = 0;
+
+        ctx.font = '18px "Segoe UI", sans-serif';
+        ctx.fillStyle = "rgba(200, 220, 255, 0.7)";
+        ctx.fillText("Ride the solar winds across the star!", W / 2, H * 0.26);
+
+        ctx.font = '15px "Segoe UI", sans-serif';
+        ctx.fillStyle = "rgba(180, 200, 255, 0.5)";
+        ctx.fillText(
+          "← → or A/D  |  Tap left/right side on mobile",
+          W / 2,
+          H * 0.32,
+        );
+        ctx.fillText(
+          "Collect solar flares to boost your altitude!",
+          W / 2,
+          H * 0.36,
+        );
+        ctx.fillText(
+          "Gravity pulls you down — don't burn up or drift away!",
+          W / 2,
+          H * 0.4,
+        );
+
+        const blink = Math.sin(frameCount * 0.05) * 0.3 + 0.7;
+        ctx.fillStyle = `rgba(255, 220, 100, ${blink})`;
+        ctx.font = '20px "Segoe UI", sans-serif';
+        ctx.fillText("Press any key or tap to start", W / 2, H * 0.5);
+
+        ctx.restore();
+
+        frameCount++;
+      }
+
+      function startHandler(e) {
+        if (showingStart) {
+          showingStart = false;
+          window.removeEventListener("keydown", startHandler);
+          canvas.removeEventListener("touchstart", touchStartHandler);
+          canvas.removeEventListener("click", startHandler);
+          initGame();
+          gameLoop();
+        }
+      }
+      function touchStartHandler(e) {
+        e.preventDefault();
+        startHandler(e);
+      }
+
+      // ── GAME LOOP ──────────────────────────────────────────
+      function startScreenLoop() {
+        if (showingStart) {
+          drawStartScreen();
+          requestAnimationFrame(startScreenLoop);
+        }
+      }
+
+      function gameLoop() {
+        update();
+        draw();
+        requestAnimationFrame(gameLoop);
+      }
+
+      // ── INIT ───────────────────────────────────────────────
+      initGame();
+      showingStart = true;
+      frameCount = 0;
+
+      window.addEventListener("keydown", startHandler);
+      canvas.addEventListener("touchstart", touchStartHandler);
+      canvas.addEventListener("click", startHandler);
+      startScreenLoop();
+    </script>
+  </body>
+</html>
