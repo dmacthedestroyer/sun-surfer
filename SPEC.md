@@ -154,6 +154,39 @@ Both show: sub-text "You rode N flares and scored N points", orange gradient "Ri
 - **Guide lines**: Dashed lines at burn/max altitude boundaries (5% opacity).
 - **Particles**: Position + velocity (0.98 drag) + size + color + life (decays 0.015–0.04/frame). Render as circles, alpha = life.
 
+## Scoreboard
+
+### Persistence
+
+- Top 20 highest-scoring games stored in `localStorage` key `"sunSurferScoreboard"`.
+- Each entry: `{ score, date (ISO string), playTimeSeconds }`.
+- Sorted descending by score. Entries beyond 20 are discarded.
+
+### Real-Time Rank
+
+- During gameplay, the player's **current rank** is displayed to the right of the score in the HUD (e.g. `#4`).
+- Rank = position the current score would occupy if inserted into the scoreboard now (1 = best).
+- If the score is below all 20 entries and the board is full, rank shows `—`.
+
+### Rank-Up Animation
+
+When the player's live rank improves (passes a stored score):
+
+1. A **green up-arrow** (▲) launches upward from the surfer toward the rank display.
+2. The arrow leaves a **faint trail of rainbow sparkles** that fade quickly.
+3. When the arrow reaches the rank text, the rank text **wobbles** (oscillating horizontal stretch) for ~20 frames.
+4. After the wobble, the rank digit(s) **roll over** like a mechanical counter (old number scrolls up, new number scrolls in from below) and settle on the new rank.
+
+### Game Over
+
+- On game over, the final score is inserted into the scoreboard (if it qualifies for top 20).
+- The game-over overlay shows the player's final rank on the board (or "unranked" if outside top 20).
+- Below the "Ride Again" button, the full top-20 scoreboard is displayed as an arcade-styled table.
+  - Columns: **Rank** (🥇🥈🥉 for top 3, then numerals), **Score** (comma-formatted), **Date** (MM/DD/YY), **Time** (e.g. `1m 23s`).
+  - The current run's row is highlighted with an amber glow.
+  - The table scrolls vertically (max ~42vh) and auto-scrolls to the current run's row.
+  - Style: monospace font, orange header gradient, dark background, low-opacity row dividers.
+
 ## Responsive Design
 
 Full-viewport canvas. Dynamic resize on `window.resize`. Touch controls for mobile. Dark background (`#0a0a1a`), flexbox centered, overflow hidden.

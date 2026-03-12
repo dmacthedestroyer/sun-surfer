@@ -40,6 +40,26 @@
         font-size: 22px;
         text-shadow: 0 0 12px rgba(255, 200, 50, 0.6);
         letter-spacing: 2px;
+        display: flex;
+        align-items: center;
+        gap: 16px;
+      }
+      #rank-display {
+        position: relative;
+        overflow: hidden;
+        font-size: 24px;
+        font-weight: bold;
+        color: #7fffaa;
+        text-shadow: 0 0 10px rgba(100, 255, 150, 0.5);
+        min-width: 50px;
+        text-align: center;
+        height: 1.3em;
+        line-height: 1.3em;
+      }
+      #rank-display .rank-digit-old,
+      #rank-display .rank-digit-new {
+        display: block;
+        transition: none;
       }
       #game-message {
         position: absolute;
@@ -74,16 +94,100 @@
       #game-message .restart-btn:hover {
         transform: scale(1.08);
       }
+      #scoreboard-wrap {
+        margin-top: 18px;
+        max-height: 42vh;
+        overflow-y: auto;
+        scrollbar-width: thin;
+        scrollbar-color: #ff9944 #1a0a2e;
+      }
+      #scoreboard-wrap::-webkit-scrollbar {
+        width: 6px;
+      }
+      #scoreboard-wrap::-webkit-scrollbar-track {
+        background: #1a0a2e;
+      }
+      #scoreboard-wrap::-webkit-scrollbar-thumb {
+        background: #ff9944;
+        border-radius: 3px;
+      }
+      #scoreboard-table {
+        border-collapse: collapse;
+        font-size: 13px;
+        font-family: "Courier New", Courier, monospace;
+        letter-spacing: 1px;
+        min-width: 380px;
+      }
+      #scoreboard-table thead tr {
+        background: linear-gradient(90deg, #3a0a00, #1a0a2e, #3a0a00);
+        color: #ff9944;
+        text-transform: uppercase;
+        font-size: 11px;
+        letter-spacing: 2px;
+      }
+      #scoreboard-table th {
+        padding: 6px 12px;
+        border-bottom: 1px solid #ff6622;
+      }
+      #scoreboard-table td {
+        padding: 5px 12px;
+        border-bottom: 1px solid rgba(255, 100, 30, 0.15);
+        color: #ffe8a0;
+        text-align: right;
+      }
+      #scoreboard-table td:first-child {
+        text-align: center;
+      }
+      #scoreboard-table td:nth-child(2) {
+        text-align: right;
+        font-weight: bold;
+      }
+      #scoreboard-table td:nth-child(3) {
+        text-align: center;
+        color: #aac4ff;
+        font-size: 12px;
+      }
+      #scoreboard-table td:nth-child(4) {
+        text-align: right;
+        color: #88ffcc;
+      }
+      #scoreboard-table tbody tr.current-run td {
+        color: #fff;
+        background: rgba(255, 153, 68, 0.18);
+        text-shadow: 0 0 6px rgba(255, 180, 50, 0.7);
+      }
+      #scoreboard-table tbody tr:hover td {
+        background: rgba(255, 255, 255, 0.04);
+      }
+      .rank-medal {
+        font-size: 15px;
+      }
     </style>
   </head>
   <body>
     <canvas id="gameCanvas"></canvas>
     <div id="ui-overlay">
-      <div id="score-display">DISTANCE: 0 | FLARES: 0</div>
+      <div id="score-display">
+        <span id="score-text">FLARES: 0 | SCORE: 0</span>
+        <span id="rank-display"></span>
+      </div>
       <div id="game-message">
         <div id="msg-title"></div>
         <div class="sub" id="msg-sub"></div>
         <button class="restart-btn" id="restart-btn">Ride Again</button>
+        <div id="scoreboard-wrap" style="display: none">
+          <table id="scoreboard-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Score</th>
+                <th>Date</th>
+                <th>Time</th>
+              </tr>
+            </thead>
+            <tbody id="scoreboard-body"></tbody>
+          </table>
+        </div>
       </div>
     </div>
 
@@ -91,11 +195,14 @@
       // ── SETUP ──────────────────────────────────────────────
       const canvas = document.getElementById("gameCanvas");
       const ctx = canvas.getContext("2d");
-      const scoreDisplay = document.getElementById("score-display");
+      const scoreText = document.getElementById("score-text");
+      const rankDisplay = document.getElementById("rank-display");
       const gameMessage = document.getElementById("game-message");
       const msgTitle = document.getElementById("msg-title");
       const msgSub = document.getElementById("msg-sub");
       const restartBtn = document.getElementById("restart-btn");
+      const scoreboardWrap = document.getElementById("scoreboard-wrap");
+      const scoreboardBody = document.getElementById("scoreboard-body");
 
       let W, H;
       function resize() {
@@ -120,6 +227,92 @@
       const BOOST_MULT_SMALL = 0.7;
       const BOOST_MULT_MEDIUM = 0.7;
       const BOOST_MULT_LARGE = 0.595;
+
+      // ── SCOREBOARD ─────────────────────────────────────────
+      const SCOREBOARD_KEY = "sunSurferScoreboard";
+      const SCOREBOARD_MAX = 20;
+
+      function loadScoreboard() {
+        try {
+          const raw = localStorage.getItem(SCOREBOARD_KEY);
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed)) return parsed.slice(0, SCOREBOARD_MAX);
+          }
+        } catch (_) {}
+        return [];
+      }
+
+      function saveToScoreboard(entry) {
+        const board = loadScoreboard();
+        board.push(entry);
+        board.sort((a, b) => b.score - a.score);
+        const trimmed = board.slice(0, SCOREBOARD_MAX);
+        try {
+          localStorage.setItem(SCOREBOARD_KEY, JSON.stringify(trimmed));
+        } catch (_) {}
+        return trimmed;
+      }
+
+      function getCurrentRank(currentScore) {
+        const board = loadScoreboard();
+        if (currentScore <= 0)
+          return board.length < SCOREBOARD_MAX ? board.length + 1 : null;
+        let rank = 1;
+        for (const entry of board) {
+          if (currentScore > entry.score) return rank;
+          rank++;
+        }
+        return rank <= SCOREBOARD_MAX ? rank : null;
+      }
+
+      function formatDuration(secs) {
+        if (secs < 60) return `${secs}s`;
+        const m = Math.floor(secs / 60),
+          s = secs % 60;
+        return `${m}m ${String(s).padStart(2, "0")}s`;
+      }
+
+      function formatDate(iso) {
+        const d = new Date(iso);
+        const mo = String(d.getMonth() + 1).padStart(2, "0");
+        const da = String(d.getDate()).padStart(2, "0");
+        const yr = String(d.getFullYear()).slice(2);
+        return `${mo}/${da}/${yr}`;
+      }
+
+      function renderScoreboard(board, highlightScore) {
+        const MEDALS = ["🥇", "🥈", "🥉"];
+        scoreboardBody.innerHTML = "";
+        board.forEach((entry, i) => {
+          const tr = document.createElement("tr");
+          const isCurrentRun = entry.score === highlightScore;
+          if (isCurrentRun) tr.className = "current-run";
+          const rankCell = MEDALS[i]
+            ? `<span class="rank-medal">${MEDALS[i]}</span>`
+            : `${i + 1}`;
+          tr.innerHTML =
+            `<td>${rankCell}</td>` +
+            `<td>${entry.score.toLocaleString()}</td>` +
+            `<td>${formatDate(entry.date)}</td>` +
+            `<td>${formatDuration(entry.playTimeSeconds ?? 0)}</td>`;
+          scoreboardBody.appendChild(tr);
+        });
+        scoreboardWrap.style.display = board.length ? "block" : "none";
+        // Scroll the highlighted row into view after a tick
+        requestAnimationFrame(() => {
+          const highlighted = scoreboardBody.querySelector(".current-run");
+          if (highlighted) highlighted.scrollIntoView({ block: "nearest" });
+        });
+      }
+
+      // ── RANK ANIMATION STATE ───────────────────────────────
+      let currentDisplayRank = null;
+      let rankArrows = [];
+      let rankSparkles = [];
+      let rankWobble = 0;
+      let rankRollover = null;
+      let gameStartTime = 0;
 
       // ── GAME STATE ─────────────────────────────────────────
       let surfer,
@@ -164,6 +357,13 @@
         flareTimer = 40;
         frameCount = 0;
         gameMessage.style.display = "none";
+        scoreboardWrap.style.display = "none";
+        currentDisplayRank = getCurrentRank(0);
+        rankArrows = [];
+        rankSparkles = [];
+        rankWobble = 0;
+        rankRollover = null;
+        gameStartTime = performance.now();
 
         // Guaranteed starting flare — at least medium, within 10% of surfer's X
         const startFlareX = surfer.x + (Math.random() - 0.5) * W * 0.1;
@@ -360,8 +560,24 @@
         // Check game over - crashed into star
         if (altitude < BURN_ALTITUDE) {
           gameState = "burned";
+          const finalScore = Math.floor(score);
+          const playTime = Math.round(
+            (performance.now() - gameStartTime) / 1000,
+          );
+          const finalBoard = saveToScoreboard({
+            score: finalScore,
+            date: new Date().toISOString(),
+            playTimeSeconds: playTime,
+          });
+          const finalRank =
+            finalBoard.findIndex((e) => e.score === finalScore) + 1;
+          const rankText =
+            finalRank > 0 && finalRank <= SCOREBOARD_MAX
+              ? `Rank #${finalRank} on the board!`
+              : "Unranked";
           msgTitle.textContent = "☀️ Burned Up!";
-          msgSub.textContent = `You rode ${flaresCollected} flares and scored ${Math.floor(score)} points`;
+          msgSub.innerHTML = `You rode ${flaresCollected} flares and scored ${finalScore} points<br>${rankText}`;
+          renderScoreboard(finalBoard, finalScore);
           gameMessage.style.display = "block";
           spawnParticles(
             surfer.x,
@@ -377,8 +593,24 @@
         // Check game over - too far from star (hit top of screen)
         if (surfer.y <= 0) {
           gameState = "lost";
+          const finalScore = Math.floor(score);
+          const playTime = Math.round(
+            (performance.now() - gameStartTime) / 1000,
+          );
+          const finalBoard = saveToScoreboard({
+            score: finalScore,
+            date: new Date().toISOString(),
+            playTimeSeconds: playTime,
+          });
+          const finalRank =
+            finalBoard.findIndex((e) => e.score === finalScore) + 1;
+          const rankText =
+            finalRank > 0 && finalRank <= SCOREBOARD_MAX
+              ? `Rank #${finalRank} on the board!`
+              : "Unranked";
           msgTitle.textContent = "🌌 Lost in Space!";
-          msgSub.textContent = `You rode ${flaresCollected} flares and scored ${Math.floor(score)} points`;
+          msgSub.innerHTML = `You rode ${flaresCollected} flares and scored ${finalScore} points<br>${rankText}`;
+          renderScoreboard(finalBoard, finalScore);
           gameMessage.style.display = "block";
           return;
         }
@@ -474,11 +706,113 @@
 
         starPulse += 0.03;
 
+        // ── RANK TRACKING ──────────────────────────────────
+        const liveRank = getCurrentRank(Math.floor(score));
+        if (
+          liveRank !== null &&
+          currentDisplayRank !== null &&
+          liveRank < currentDisplayRank
+        ) {
+          // Rank improved — launch arrow from surfer to HUD
+          const surferScreenX = W / 2;
+          const surferScreenY = surfer.y + Math.sin(surfer.bobPhase) * 3;
+          rankArrows.push({
+            x: surferScreenX,
+            y: surferScreenY,
+            targetRank: liveRank,
+            oldRank: currentDisplayRank,
+            speed: 8,
+            sparkleTimer: 0,
+          });
+          currentDisplayRank = liveRank;
+        } else if (liveRank !== null && liveRank !== currentDisplayRank) {
+          currentDisplayRank = liveRank;
+        }
+
+        // Update rank arrows
+        const rankRect = rankDisplay.getBoundingClientRect();
+        const rankTargetX = rankRect.left + rankRect.width / 2;
+        const rankTargetY = rankRect.top + rankRect.height / 2;
+        for (let i = rankArrows.length - 1; i >= 0; i--) {
+          const a = rankArrows[i];
+          const dx = rankTargetX - a.x;
+          const dy = rankTargetY - a.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist < 12) {
+            // Arrow reached rank — trigger wobble + rollover
+            rankWobble = 20;
+            rankRollover = {
+              oldRank: a.oldRank,
+              newRank: a.targetRank,
+              frame: 0,
+              totalFrames: 18,
+            };
+            rankArrows.splice(i, 1);
+            continue;
+          }
+          const nx = dx / dist;
+          const ny = dy / dist;
+          a.x += nx * a.speed;
+          a.y += ny * a.speed;
+          // Spawn rainbow sparkles along trail
+          a.sparkleTimer++;
+          if (a.sparkleTimer % 2 === 0) {
+            const hue = (frameCount * 8 + a.sparkleTimer * 30) % 360;
+            rankSparkles.push({
+              x: a.x + (Math.random() - 0.5) * 6,
+              y: a.y + (Math.random() - 0.5) * 6,
+              size: Math.random() * 3 + 1.5,
+              life: 1.0,
+              hue,
+            });
+          }
+        }
+
+        // Update sparkles
+        for (let i = rankSparkles.length - 1; i >= 0; i--) {
+          rankSparkles[i].life -= 0.04;
+          if (rankSparkles[i].life <= 0) rankSparkles.splice(i, 1);
+        }
+
+        // Update wobble
+        if (rankWobble > 0) rankWobble--;
+
+        // Update rollover
+        if (rankRollover) {
+          rankRollover.frame++;
+          if (rankRollover.frame >= rankRollover.totalFrames)
+            rankRollover = null;
+        }
+
         // Update score display
-        scoreDisplay.textContent = `FLARES: ${flaresCollected} | SCORE: ${Math.floor(score)}`;
+        scoreText.textContent = `FLARES: ${flaresCollected} | SCORE: ${Math.floor(score)}`;
+        updateRankDisplay();
       }
 
       // ── DRAW ───────────────────────────────────────────────
+      function updateRankDisplay() {
+        if (rankRollover) {
+          const progress = rankRollover.frame / rankRollover.totalFrames;
+          const oldText = `#${rankRollover.oldRank}`;
+          const newText = `#${rankRollover.newRank}`;
+          // Mechanical rollover: old scrolls up, new scrolls in from below
+          const offsetPx = progress * 1.3; // in em units
+          rankDisplay.innerHTML =
+            `<span style="display:block;transform:translateY(${-offsetPx}em);opacity:${1 - progress}">${oldText}</span>` +
+            `<span style="display:block;transform:translateY(${1.3 - offsetPx}em);position:absolute;left:0;right:0;">${newText}</span>`;
+        } else {
+          const rank = currentDisplayRank;
+          rankDisplay.textContent = rank !== null ? `#${rank}` : "—";
+        }
+        // Wobble effect
+        if (rankWobble > 0) {
+          const wobbleAmt = Math.sin(rankWobble * 0.8) * (rankWobble / 20) * 8;
+          rankDisplay.style.transform = `scaleX(${1 + wobbleAmt * 0.04}) scaleY(${1 - wobbleAmt * 0.02})`;
+        } else {
+          rankDisplay.style.transform = "";
+        }
+      }
+
       function draw() {
         ctx.fillStyle = "#0a0a1a";
         ctx.fillRect(0, 0, W, H);
@@ -508,6 +842,39 @@
 
         // Surfer
         drawSurfer();
+
+        // Rank-up arrows + sparkles (drawn in screen space)
+        drawRankArrows();
+        drawRankSparkles();
+      }
+
+      function drawRankArrows() {
+        for (const a of rankArrows) {
+          ctx.save();
+          ctx.translate(a.x, a.y);
+          // Green up-arrow (▲)
+          ctx.fillStyle = "#44ff88";
+          ctx.shadowColor = "rgba(50, 255, 100, 0.8)";
+          ctx.shadowBlur = 12;
+          ctx.beginPath();
+          ctx.moveTo(0, -10);
+          ctx.lineTo(-6, 4);
+          ctx.lineTo(6, 4);
+          ctx.closePath();
+          ctx.fill();
+          ctx.shadowBlur = 0;
+          ctx.restore();
+        }
+      }
+
+      function drawRankSparkles() {
+        for (const s of rankSparkles) {
+          const alpha = s.life * 0.7;
+          ctx.fillStyle = `hsla(${s.hue}, 100%, 70%, ${alpha})`;
+          ctx.beginPath();
+          ctx.arc(s.x, s.y, s.size * s.life, 0, Math.PI * 2);
+          ctx.fill();
+        }
       }
 
       function drawStars() {
